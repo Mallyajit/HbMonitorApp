@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -47,7 +46,12 @@ class HemePulseAppState extends ChangeNotifier {
   final List<int> _ambientSeries = <int>[];
   final List<int> _redSeries = <int>[];
   final List<int> _irSeries = <int>[];
-  final List<double> _ratioSeries = <double>[];
+  final List<int> _recentValleys = <int>[];
+
+  // Exposed getters for UI Graph
+  List<int> get redSeries => _redSeries;
+  List<int> get sourceTimestamps => _sourceTimestamps;
+  List<int> get recentValleys => _recentValleys;
 
   int _consecutiveSuspicious = 0;
 
@@ -318,23 +322,26 @@ class HemePulseAppState extends ChangeNotifier {
         .where((s) => s.ratioR > 0 && s.confidence >= 40)
         .toList();
 
-    if (validTests.length < 4) {
-      return 'Collecting Data (${validTests.length}/4 tests)';
+    if (validTests.length < 5) {
+      return 'Collecting Data (${validTests.length}/5 tests)';
     }
 
     // Use last 5 tests for consensus
     final recent = validTests.reversed.take(5).toList();
     int dangerCount = 0;
     int cautionCount = 0;
+    int watchCount = 0;
 
     for (final test in recent) {
       final drift = ((test.ratioR - calibration.userBaselineR) /
               calibration.userBaselineR)
           .abs();
-      if (drift >= 0.12) {
+      if (drift >= 0.30) {
         dangerCount++;
-      } else if (drift >= 0.07) {
+      } else if (drift >= 0.20) {
         cautionCount++;
+      } else if (drift >= 0.10) {
+        watchCount++;
       }
     }
 
@@ -347,8 +354,8 @@ class HemePulseAppState extends ChangeNotifier {
         }) /
         recent.length;
 
-    // Map drift to percentage: 0% drift = 100%, >25% drift = ~50%
-    final hbPct = math.max(0.0, 1.0 - avgDrift * 2.0) * 100;
+    // Map drift to percentage: 0% drift = 100%, >30% drift = ~50%
+    final hbPct = math.max(0.0, 1.0 - (avgDrift / 0.6)) * 100;
 
     if (hbPct < 50 && dangerCount >= 3) {
       return 'DANGER — Seek Medical Attention';
@@ -356,8 +363,8 @@ class HemePulseAppState extends ChangeNotifier {
     if (hbPct < 75 && (dangerCount >= 2 || cautionCount >= 3)) {
       return 'Caution — Low Hemoglobin Trend';
     }
-    if (cautionCount >= 2) {
-      return 'Slight Concern — Monitor Closely';
+    if (cautionCount >= 2 || watchCount >= 3) {
+      return 'Watch — Monitor Closely';
     }
     return 'Normal';
   }
@@ -367,7 +374,7 @@ class HemePulseAppState extends ChangeNotifier {
     final label = hbStatusLabel;
     if (label.startsWith('DANGER')) return const Color(0xFFD32F2F);
     if (label.startsWith('Caution')) return const Color(0xFFE65100);
-    if (label.startsWith('Slight')) return const Color(0xFFF9A825);
+    if (label.startsWith('Watch')) return const Color(0xFFF9A825);
     if (label.startsWith('Collecting')) return const Color(0xFF1565C0);
     if (label.startsWith('Baseline')) return Colors.grey;
     return const Color(0xFF2E7D32);
@@ -421,44 +428,36 @@ class HemePulseAppState extends ChangeNotifier {
 
   void _onBleUpdate(BleUpdate update) {
     if (update.characteristicUuid == BleConfig.packetUuid) {
-      final packet = PayloadParser.parseSensorPacket(update.value);
-      if (packet == null) {
-        return;
+      final samples = PayloadParser.parseBatch(update.value);
+      if (samples.isEmpty) return;
+
+      for (final sample in samples) {
+        _appendRawSeries(sample);
       }
 
-        final double ratio = packet.ratioR > 0
-          ? packet.ratioR
-          : (packet.irCorrected == 0
-            ? 0.0
-            : packet.redCorrected.toDouble() /
-              packet.irCorrected.toDouble());
-
-      _appendRawSeries(packet, ratio);
-
-      // BPM: compute on app side from RED signal drops (valleys)
-      final bpm = _estimateBpmFromDrops();
+      final latestRaw = samples.last;
+      
+      // Only compute AC/DC ratio in Hb mode (requires both LEDs)
+      final ratio = latestRaw.isHbMode ? _computeACDCRatio() : 0.0;
+      final bpm = _estimateBpmFromPeaks();
       final motionLikely = _isMotionLikely();
-      final confidence = _estimateConfidence(packet, bpm, motionLikely);
+      final confidence = _estimateConfidence(latestRaw, bpm, motionLikely);
       final warning = _estimateWarning(ratio, confidence, motionLikely);
 
-      int flags = packet.flags;
-      if (bpm > 0) {
-        flags |= 0x01;
-      }
-      if (motionLikely) {
-        flags |= 0x40;
-      }
+      int flags = 0;
+      if (bpm > 0) flags |= 0x01;
+      if (motionLikely) flags |= 0x40;
 
       latest = VitalSnapshot(
         timestamp: DateTime.now(),
-        sourceTimestampMs: packet.timestampMs,
+        sourceTimestampMs: latestRaw.timestampMs,
         bpm: bpm,
         ratioR: ratio,
         confidence: confidence,
         warning: warning,
-        ambientRaw: packet.ambientRaw,
-        redRaw: packet.redCorrected,
-        irRaw: packet.irCorrected,
+        ambientRaw: latestRaw.ambientRaw,
+        redRaw: latestRaw.redCorrected,
+        irRaw: latestRaw.irCorrected,
         motionLikely: motionLikely,
         flags: flags,
       );
@@ -479,44 +478,22 @@ class HemePulseAppState extends ChangeNotifier {
     }
 
     if (update.characteristicUuid == BleConfig.baselineUuid) {
-      if (!_hasMinimumPayloadLength(update.characteristicUuid, update.value)) {
-        return;
-      }
+      final baselineInfo = PayloadParser.parseBaseline(update.value);
+      if (baselineInfo == null) return;
 
-      _mergeBaselinePayload(update.value);
+      calibration = calibration.copyWith(
+        userBaselineR: baselineInfo.baselineR,
+        baselineValid: baselineInfo.valid,
+      );
+
+      _storageService.saveCalibrationProfile(calibration);
       notifyListeners();
       return;
     }
   }
 
-  bool _hasMinimumPayloadLength(Guid uuid, List<int> bytes) {
-    if (uuid == BleConfig.packetUuid) {
-      return bytes.length >= 17;
-    }
-
-    if (uuid == BleConfig.baselineUuid) {
-      return bytes.length >= 5;
-    }
-
-    return bytes.isNotEmpty;
-  }
-
-  void _mergeBaselinePayload(List<int> bytes) {
-    if (bytes.length < 5) {
-      return;
-    }
-
-    final data = ByteData.sublistView(Uint8List.fromList(bytes));
-    final baseline = data.getFloat32(0, Endian.little).toDouble();
-    final valid = bytes[4] == 1;
-
-    calibration = calibration.copyWith(
-      userBaselineR: baseline,
-      baselineValid: valid,
-    );
-
-    _storageService.saveCalibrationProfile(calibration);
-  }
+  // _hasMinimumPayloadLength and _mergeBaselinePayload removed because
+  // we now use PayloadParser.parseBaseline which handles validation.
 
   void _updateAlert(VitalSnapshot snapshot) {
     // Don't override pulse check alert
@@ -561,15 +538,13 @@ class HemePulseAppState extends ChangeNotifier {
     _ambientSeries.clear();
     _redSeries.clear();
     _irSeries.clear();
-    _ratioSeries.clear();
   }
 
-  void _appendRawSeries(SensorPacket packet, double ratio) {
+  void _appendRawSeries(RawSample packet) {
     _sourceTimestamps.add(packet.timestampMs);
     _ambientSeries.add(packet.ambientRaw);
     _redSeries.add(packet.redCorrected);
     _irSeries.add(packet.irCorrected);
-    _ratioSeries.add(ratio);
 
     const int maxLen = 2200;
     if (_sourceTimestamps.length > maxLen) {
@@ -577,91 +552,160 @@ class HemePulseAppState extends ChangeNotifier {
       _ambientSeries.removeAt(0);
       _redSeries.removeAt(0);
       _irSeries.removeAt(0);
-      _ratioSeries.removeAt(0);
     }
   }
 
-  /// BPM estimation using valley/drop detection on the RED corrected signal.
-  /// Drops (sudden falls) in the RED signal correspond to heartbeat pulses.
-  int _estimateBpmFromDrops() {
-    if (_redSeries.length < 30) {
+  /// Proper AC/DC R-value ratio computation.
+  double _computeACDCRatio() {
+    if (_redSeries.length < 60 || _irSeries.length < 60) return 0.0;
+    
+    // Take the last 60 samples (3 seconds at 20Hz)
+    final int start = math.max(0, _redSeries.length - 60);
+    final redSlice = _redSeries.sublist(start);
+    final irSlice = _irSeries.sublist(start);
+
+    double getAC(List<int> slice) {
+      int minV = slice[0];
+      int maxV = slice[0];
+      for (int v in slice) {
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+      }
+      return (maxV - minV).toDouble();
+    }
+
+    double getDC(List<int> slice) {
+      double sum = 0;
+      for (int v in slice) sum += v;
+      return sum / slice.length;
+    }
+
+    final redAC = getAC(redSlice);
+    final redDC = getDC(redSlice);
+    final irAC = getAC(irSlice);
+    final irDC = getDC(irSlice);
+
+    if (redDC <= 1.0 || irDC <= 1.0 || irAC <= 0.0 || redAC <= 0.0) return 0.0;
+
+    final ratio = (redAC / redDC) / (irAC / irDC);
+    return ratio.clamp(0.0, 10.0);
+  }
+
+  /// BPM estimation analyzing isolated chunks (e.g. 4 seconds) to find distinct positive peaks.
+  int _estimateBpmFromPeaks() {
+    // 1. Take exactly the last 80 samples (4 seconds at 20Hz)
+    const int sampleSize = 80;
+    if (_redSeries.length < sampleSize) {
       return 0;
     }
 
-    final int start = math.max(0, _redSeries.length - 300);
+    final int start = _redSeries.length - sampleSize;
+    final List<int> rawChunk = _redSeries.sublist(start);
+    final List<int> tsChunk = _sourceTimestamps.sublist(start);
+
+    // 2. Apply EMA filtering (alpha = 0.4 for smooth waves)
     final List<double> filtered = <double>[];
-    final List<int> ts = <int>[];
-
-    // Apply 5-point moving average baseline removal
-    for (int i = start + 2; i < _redSeries.length - 2; i++) {
-      final double ma = (_redSeries[i - 2] +
-              _redSeries[i - 1] +
-              _redSeries[i] +
-              _redSeries[i + 1] +
-              _redSeries[i + 2]) /
-          5.0;
-      filtered.add(_redSeries[i] - ma);
-      ts.add(_sourceTimestamps[i]);
+    double ema = rawChunk[0].toDouble();
+    for (int i = 0; i < rawChunk.length; i++) {
+      ema = (0.4 * rawChunk[i]) + (0.6 * ema);
+      filtered.add(ema);
     }
 
-    if (filtered.length < 8) {
-      return 0;
+    // 3. Remove DC baseline using moving average (~1s window)
+    final List<double> acSignal = <double>[];
+    const int window = 10;
+    for (int i = window; i < filtered.length - window; i++) {
+      double sumMa = 0;
+      for (int j = -window; j <= window; j++) sumMa += filtered[i + j];
+      acSignal.add(filtered[i] - (sumMa / 21.0));
+    }
+    final List<int> acTs = tsChunk.sublist(window, filtered.length - window);
+
+    if (acSignal.length < 10) return 0;
+
+    // 4. Find the absolute highest peak in this 4-second chunk
+    double maxAc = 0;
+    for (final val in acSignal) {
+      if (val > maxAc) maxAc = val;
+    }
+    
+    // Threshold is 50% of the highest peak in this chunk
+    // This strictly ensures we only take peaks that have a "significant difference than surroundings"
+    final double threshold = math.max(1.0, maxAc * 0.50);
+
+    // 5. Detect all prominent peaks in this chunk
+    final List<int> candidates = <int>[];
+    for (int i = 1; i < acSignal.length - 1; i++) {
+      final double val = acSignal[i];
+      if (val > acSignal[i - 1] && val >= acSignal[i + 1] && val > threshold) {
+        candidates.add(i);
+      }
     }
 
-    // Compute statistics for threshold
-    double sum = 0;
-    for (final value in filtered) {
-      sum += value;
-    }
-    final double mean = sum / filtered.length;
+    // 6. Filter peaks: keep only the highest peak in any 545ms window (110 BPM max)
+    final List<int> finalPeaks = <int>[];
+    const int minIntervalMs = 545; // Max 110 BPM
+    
+    for (int i = 0; i < candidates.length; i++) {
+      final int currentIdx = candidates[i];
+      final int currentTs = acTs[currentIdx];
+      final double currentVal = acSignal[currentIdx];
 
-    double variance = 0;
-    for (final value in filtered) {
-      final double d = value - mean;
-      variance += d * d;
-    }
-    variance /= filtered.length;
-
-    final double stddev = math.sqrt(variance);
-    // Valley threshold: look for drops BELOW this negative threshold
-    final double threshold = mean - math.max(1.5, stddev * 0.4);
-
-    // Detect local valleys (sudden drops = heartbeat in PPG)
-    final List<int> valleys = <int>[];
-    for (int i = 1; i < filtered.length - 1; i++) {
-      final bool localValley = filtered[i] < filtered[i - 1] &&
-          filtered[i] <= filtered[i + 1] &&
-          filtered[i] < threshold;
-      if (!localValley) {
+      if (finalPeaks.isEmpty) {
+        finalPeaks.add(currentTs);
         continue;
       }
-
-      final int valleyTs = ts[i];
-      if (valleys.isEmpty || (valleyTs - valleys.last) >= 320) {
-        valleys.add(valleyTs);
+      
+      final int lastTs = finalPeaks.last;
+      final int diff = currentTs - lastTs;
+      
+      if (diff < minIntervalMs) {
+        // Find index of last peak to compare values
+        int lastIdx = -1;
+        for (int k = 0; k < acTs.length; k++) {
+          if (acTs[k] == lastTs) {
+             lastIdx = k;
+             break;
+          }
+        }
+        
+        // If this new peak is actually higher, replace the old one
+        if (lastIdx != -1 && currentVal > acSignal[lastIdx]) {
+           finalPeaks[finalPeaks.length - 1] = currentTs;
+        }
+      } else {
+        finalPeaks.add(currentTs);
       }
     }
 
-    if (valleys.length < 2) {
+    // Mark these as the recent detected peaks for the UI (red dots)
+    _recentValleys.clear();
+    _recentValleys.addAll(finalPeaks);
+
+    if (finalPeaks.length < 2) {
       return 0;
     }
 
+    // 7. Compute BPM
     final List<int> intervals = <int>[];
-    for (int i = 1; i < valleys.length; i++) {
-      final int interval = valleys[i] - valleys[i - 1];
-      if (interval >= 300 && interval <= 1500) {
+    for (int i = 1; i < finalPeaks.length; i++) {
+      final int interval = finalPeaks[i] - finalPeaks[i - 1];
+      // Restrict intervals to 545ms (110BPM) up to 1500ms (40BPM)
+      if (interval >= minIntervalMs && interval <= 1500) {
         intervals.add(interval);
       }
     }
 
-    if (intervals.length < 2) {
+    if (intervals.isEmpty) {
       return 0;
     }
 
     final double avgInterval =
         intervals.reduce((a, b) => a + b) / intervals.length;
     final int bpm = (60000.0 / avgInterval).round();
-    if (bpm < 40 || bpm > 190) {
+
+    // Final hard clamp
+    if (bpm < 40 || bpm > 110) {
       return 0;
     }
 
@@ -698,14 +742,14 @@ class HemePulseAppState extends ChangeNotifier {
     return norm > 0.22;
   }
 
-  int _estimateConfidence(SensorPacket packet, int bpm, bool motionLikely) {
-    int score = packet.confidence;
+  int _estimateConfidence(RawSample packet, int bpm, bool motionLikely) {
+    int score = 100;
 
     if (bpm == 0) {
       score -= 12;
     }
     // In pulse mode, only RED is active so don't penalize for low IR
-    if (!pulseCheckActive) {
+    if (!packet.isPulseMode) {
       if (packet.irCorrected < 18) {
         score -= 20;
       }

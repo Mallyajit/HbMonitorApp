@@ -75,11 +75,11 @@ class HemoglobinStatusScreen extends StatelessWidget {
                   Text(
                     hasBaseline
                         ? 'Based on $testCount test${testCount == 1 ? '' : 's'} '
-                            '(needs ${testCount < 4 ? '${4 - testCount} more' : 'sufficient'})'
+                            '(needs ${testCount < 5 ? '${5 - testCount} more' : 'sufficient'})'
                         : 'Set a baseline to begin monitoring',
                     style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
                   ),
-                  if (hasBaseline && testCount >= 4) ...[
+                  if (hasBaseline && testCount >= 5) ...[
                     const SizedBox(height: 4),
                     Text(
                       'Confidence: ${hbConfidence.toStringAsFixed(0)}%',

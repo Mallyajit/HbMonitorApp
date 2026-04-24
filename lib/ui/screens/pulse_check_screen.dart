@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../state/app_state.dart';
+import '../widgets/live_pulse_graph.dart';
 
 class PulseCheckScreen extends StatelessWidget {
   final HemePulseAppState state;
@@ -26,6 +27,19 @@ class PulseCheckScreen extends StatelessWidget {
             const Text(
               'Flashes the RED LED and measures your pulse rate from the corrected signal. '
               'Keep your finger/ear-lobe still during measurement.',
+            ),
+            const SizedBox(height: 16),
+            // Live Pulse Graph
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LivePulseGraph(state: state),
+              ),
             ),
             const SizedBox(height: 16),
             // BPM display
@@ -75,14 +89,14 @@ class PulseCheckScreen extends StatelessWidget {
                           ? state.stopPulseCheck
                           : null,
                       icon: const Icon(Icons.stop),
-                      label: const Text('Stop Pulse Check'),
+                      label: const Text('Stop BPM Check'),
                     )
                   : FilledButton.icon(
                       onPressed: state.connected
                           ? state.startPulseCheck
                           : null,
                       icon: const Icon(Icons.favorite),
-                      label: const Text('Check Pulse'),
+                      label: const Text('Start BPM Check'),
                     ),
             ),
           ],

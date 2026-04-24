@@ -49,19 +49,7 @@ class DashboardScreen extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               const Text(
-                'IR Waveform Trend',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                height: 190,
-                child: TrendChart(data: state.trend),
-              ),
-              const SizedBox(height: 16),
-              _SessionTrendCard(state: state),
-              const SizedBox(height: 16),
-              const Text(
-                'Modes',
+                'Monitoring Modes',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 8),
@@ -69,7 +57,7 @@ class DashboardScreen extends StatelessWidget {
                 children: [
                   Expanded(
                     child: ChoiceChip(
-                      label: const Text('Pulse Check'),
+                      label: const Text('BPM Check'),
                       selected: state.mode == AppMode.pulseCheck,
                       onSelected: (_) => state.setMode(AppMode.pulseCheck),
                     ),
@@ -89,6 +77,18 @@ class DashboardScreen extends StatelessWidget {
                 PulseCheckScreen(state: state)
               else
                 HemoglobinStatusScreen(state: state),
+              const SizedBox(height: 16),
+              const Text(
+                'IR Waveform Trend',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 190,
+                child: TrendChart(data: state.trend),
+              ),
+              const SizedBox(height: 16),
+              _SessionTrendCard(state: state),
               const SizedBox(height: 12),
               _SignalDetails(snapshot: snapshot),
             ],

@@ -24,8 +24,22 @@ class HemePulseApp extends StatelessWidget {
         theme: ThemeData(
           useMaterial3: true,
           colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF0B6E4F),
+            seedColor: const Color(0xFF2E7D32),
             brightness: Brightness.light,
+          ).copyWith(
+            primary: const Color(0xFF1B5E20),
+            secondary: const Color(0xFF2E7D32),
+            tertiary: const Color(0xFF4CAF50),
+          ),
+          appBarTheme: const AppBarTheme(
+            backgroundColor: Color(0xFF1B5E20),
+            foregroundColor: Colors.white,
+          ),
+          filledButtonTheme: FilledButtonThemeData(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF2E7D32),
+              foregroundColor: Colors.white,
+            ),
           ),
         ),
         home: const _HomeShell(),
