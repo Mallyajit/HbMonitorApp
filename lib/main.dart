@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'state/app_state.dart';
-import 'ui/screens/calibration_screen.dart';
-import 'ui/screens/dashboard_screen.dart';
-import 'ui/screens/scan_screen.dart';
+import 'ui/screens/home_screen.dart';
+import 'ui/screens/connect_screen.dart';
+import 'ui/screens/analytics_screen.dart';
+import 'ui/screens/settings_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,46 +25,34 @@ class HemePulseApp extends StatelessWidget {
         theme: ThemeData(
           useMaterial3: true,
           colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF2E7D32),
+            seedColor: const Color(0xFFEF4444),
             brightness: Brightness.light,
-          ).copyWith(
-            primary: const Color(0xFF1B5E20),
-            secondary: const Color(0xFF2E7D32),
-            tertiary: const Color(0xFF4CAF50),
           ),
-          appBarTheme: const AppBarTheme(
-            backgroundColor: Color(0xFF1B5E20),
-            foregroundColor: Colors.white,
-          ),
-          filledButtonTheme: FilledButtonThemeData(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF2E7D32),
-              foregroundColor: Colors.white,
-            ),
-          ),
+          scaffoldBackgroundColor: const Color(0xFFF9FAFB),
         ),
-        home: const _HomeShell(),
+        home: const _AppShell(),
       ),
     );
   }
 }
 
-class _HomeShell extends StatefulWidget {
-  const _HomeShell();
+class _AppShell extends StatefulWidget {
+  const _AppShell();
 
   @override
-  State<_HomeShell> createState() => _HomeShellState();
+  State<_AppShell> createState() => _AppShellState();
 }
 
-class _HomeShellState extends State<_HomeShell> {
+class _AppShellState extends State<_AppShell> {
   int _index = 0;
 
   @override
   Widget build(BuildContext context) {
     const pages = <Widget>[
-      ScanScreen(),
-      DashboardScreen(),
-      CalibrationScreen(),
+      HomeScreen(),
+      ConnectScreen(),
+      AnalyticsScreen(),
+      SettingsScreen(),
     ];
 
     return Scaffold(
@@ -71,10 +60,29 @@ class _HomeShellState extends State<_HomeShell> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (value) => setState(() => _index = value),
+        backgroundColor: Colors.white,
+        indicatorColor: const Color(0xFFFEE2E2),
         destinations: const [
-          NavigationDestination(icon: Icon(Icons.bluetooth), label: 'Scan'),
-          NavigationDestination(icon: Icon(Icons.monitor_heart), label: 'Dashboard'),
-          NavigationDestination(icon: Icon(Icons.tune), label: 'Calibration'),
+          NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home, color: Color(0xFFEF4444)),
+            label: 'Home',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.bluetooth_outlined),
+            selectedIcon: Icon(Icons.bluetooth, color: Color(0xFFEF4444)),
+            label: 'Connect',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.bar_chart_outlined),
+            selectedIcon: Icon(Icons.bar_chart, color: Color(0xFFEF4444)),
+            label: 'Analytics',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.settings_outlined),
+            selectedIcon: Icon(Icons.settings, color: Color(0xFFEF4444)),
+            label: 'Settings',
+          ),
         ],
       ),
     );

@@ -13,7 +13,7 @@ class LivePulseGraph extends StatelessWidget {
     return AnimatedBuilder(
       animation: state,
       builder: (context, _) {
-        if (!state.pulseCheckActive || state.redSeries.isEmpty) {
+        if (!state.isScanning || state.redSeries.isEmpty) {
           return const Center(
             child: Text(
               'Graph will appear when BPM Check starts...',
@@ -27,7 +27,7 @@ class LivePulseGraph extends StatelessWidget {
           painter: _PulseGraphPainter(
             redSeries: state.redSeries,
             timestamps: state.sourceTimestamps,
-            valleys: state.recentValleys,
+            peaks: state.recentPeaks,
           ),
         );
       },
@@ -38,12 +38,12 @@ class LivePulseGraph extends StatelessWidget {
 class _PulseGraphPainter extends CustomPainter {
   final List<int> redSeries;
   final List<int> timestamps;
-  final List<int> valleys;
+  final List<int> peaks;
 
   _PulseGraphPainter({
     required this.redSeries,
     required this.timestamps,
-    required this.valleys,
+    required this.peaks,
   });
 
   @override
@@ -84,8 +84,8 @@ class _PulseGraphPainter extends CustomPainter {
     
     final double stepX = size.width / (maxVisiblePoints - 1);
     
-    // Convert valleys to a quick lookup set for the current window
-    final Set<int> valleySet = valleys.toSet();
+    // Convert peaks to a quick lookup set for the current window
+    final Set<int> peakSet = peaks.toSet();
 
     for (int i = 0; i < visibleRed.length; i++) {
       // Points align to the right, so recent data is on the right side
@@ -101,8 +101,8 @@ class _PulseGraphPainter extends CustomPainter {
         path.lineTo(x, y);
       }
 
-      // Draw red dot if this point is marked as a valley (heartbeat)
-      if (valleySet.contains(visibleTs[i])) {
+      // Draw red dot if this point is marked as a peak (heartbeat)
+      if (peakSet.contains(visibleTs[i])) {
         canvas.drawCircle(Offset(x, y), 5.0, dotPaint);
       }
     }
