@@ -12,43 +12,112 @@ class HomeScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<HemePulseAppState>(
       builder: (context, state, _) {
-        return Scaffold(
-          backgroundColor: const Color(0xFFF9FAFB),
-          body: SafeArea(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              children: [
-                const SizedBox(height: 12),
-                // ── Header ──
-                _buildHeader(),
-                const SizedBox(height: 12),
+        return Stack(
+          children: [
+            Scaffold(
+              backgroundColor: const Color(0xFFF9FAFB),
+              body: SafeArea(
+                child: ListView(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  children: [
+                    const SizedBox(height: 12),
+                    // ── Header ──
+                    _buildHeader(),
+                    const SizedBox(height: 12),
 
-                // ── Device Status ──
-                _buildDeviceStatus(state),
-                const SizedBox(height: 16),
+                    // ── Device Status ──
+                    _buildDeviceStatus(state),
+                    const SizedBox(height: 16),
 
-                // ── Main Hb Card ──
-                _buildHbCard(state),
-                const SizedBox(height: 16),
+                    // ── Main Hb Card ──
+                    _buildHbCard(state),
+                    const SizedBox(height: 16),
 
-                // ── Start Scan Button ──
-                _buildScanButton(state),
-                const SizedBox(height: 16),
+                    // ── Raw Signals (Voltage) ──
+                    // _buildRawSignalsCard(state),
+                    // const SizedBox(height: 16),
 
-                // ── Metrics Row ──
-                _buildMetricsRow(state),
-                const SizedBox(height: 16),
+                    // ── Start Scan Button ──
+                    _buildScanButton(state),
+                    const SizedBox(height: 16),
 
-                // ── Hb Trend Chart ──
-                _buildTrendChart(state),
-                const SizedBox(height: 16),
+                    // ── Metrics Row ──
+                    _buildMetricsRow(state),
+                    const SizedBox(height: 16),
 
-                // ── Health Tip ──
-                _buildTip(),
-                const SizedBox(height: 24),
-              ],
+                    // ── Hb Trend Chart ──
+                    _buildTrendChart(state),
+                    const SizedBox(height: 16),
+
+                    // ── Health Tip ──
+                    _buildTip(),
+                    const SizedBox(height: 24),
+                  ],
+                ),
+              ),
             ),
-          ),
+            
+            // ── Alert Popup Overlay ──
+            if (state.alertMessage != null)
+              Container(
+                color: Colors.black54,
+                child: Center(
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 32),
+                    padding: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Colors.black26,
+                          blurRadius: 10,
+                          offset: Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.warning_amber_rounded,
+                          color: Colors.orange,
+                          size: 48,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          state.alertMessage!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFEF4444),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                            ),
+                            onPressed: () {
+                              state.clearAlert();
+                            },
+                            child: const Text('Close', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+          ],
         );
       },
     );
@@ -247,9 +316,69 @@ class HomeScreen extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
+          Text(
+            state.userGender == 'Male'
+                ? 'Normal Range: 13.5 – 18.0 g/dL'
+                : (state.userGender == 'Female' ? 'Normal Range: 11.5 – 15.5 g/dL' : 'Normal Range: 12.0 – 16.0 g/dL'),
+            style: const TextStyle(color: Colors.white60, fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRawSignalsCard(HemePulseAppState state) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
           const Text(
-            'Normal Range: 12.0 – 16.0 g/dL',
-            style: TextStyle(color: Colors.white60, fontSize: 11),
+            'Sensor Debug (Raw Signal)',
+            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFEE2E2),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    children: [
+                      const Text('Red Light', style: TextStyle(fontSize: 12, color: Color(0xFF991B1B))),
+                      const SizedBox(height: 4),
+                      Text(state.currentFingerRed.toStringAsFixed(1), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF7F1D1D))),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE0E7FF),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    children: [
+                      const Text('IR Light', style: TextStyle(fontSize: 12, color: Color(0xFF3730A3))),
+                      const SizedBox(height: 4),
+                      Text(state.currentFingerIr.toStringAsFixed(1), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF312E81))),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

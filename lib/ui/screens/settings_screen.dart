@@ -216,8 +216,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       Expanded(
                         child: ElevatedButton.icon(
                           onPressed: () async {
-                            final red = double.tryParse(_baselineRedController.text.trim()) ?? 300.0;
-                            final ir = double.tryParse(_baselineIrController.text.trim()) ?? 700.0;
+                            final red = double.tryParse(_baselineRedController.text.trim()) ?? 100.0;
+                            final ir = double.tryParse(_baselineIrController.text.trim()) ?? 100.0;
                             final vref = double.tryParse(_vrefController.text.trim()) ?? 1200.0;
                             await state.saveCalibration(
                               baselineRedAdc: red,
@@ -260,11 +260,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       onPressed: () async {
                         await state.clearBaseline();
                         // Update UI fields
-                        _baselineRedController.text = '300';
-                        _baselineIrController.text = '700';
+                        _baselineRedController.text = '100';
+                        _baselineIrController.text = '100';
+                        _vrefController.text = '1200';
                         if (!context.mounted) return;
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Baseline cleared to defaults (300/700).')),
+                          const SnackBar(content: Text('Baseline cleared to defaults (100/100/1200mV).')),
                         );
                       },
                       icon: const Icon(Icons.delete_outline, size: 18),

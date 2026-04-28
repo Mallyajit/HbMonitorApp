@@ -23,8 +23,8 @@ class CalibrationProfile {
   });
 
   const CalibrationProfile.defaults()
-      : baselineRedAdc = 300,
-        baselineIrAdc = 700,
+      : baselineRedAdc = 100,
+        baselineIrAdc = 100,
         baselineVoltageMv = 1200,
         userBaselineR = 0,
         baselineValid = false;

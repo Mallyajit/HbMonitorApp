@@ -15,6 +15,18 @@ import '../services/payload_parser.dart';
 import '../services/storage_service.dart';
 
 class HemePulseAppState extends ChangeNotifier {
+  // ===========================================================================
+  // 🛠️ EDIT THESE VALUES TO ADJUST SENSOR READINGS MANUALLY 🛠️
+  // ===========================================================================
+  // If you want to subtract a value from the RAW IR reading, put it here.
+  // For example, to subtract 70000 from the raw ADC: IR_RAW_SUBTRACT = 70000.0
+  static const double IR_RAW_SUBTRACT = 0;
+
+  // If you want to divide the RAW IR reading, change this (1.0 means no division).
+  // For example, to reduce it by 141.5 times: IR_RAW_DIVISOR = 141.5
+  static const double IR_RAW_DIVISOR = 1;
+  // ===========================================================================
+
   final BleService _bleService;
   final StorageService _storageService;
 
@@ -50,6 +62,8 @@ class HemePulseAppState extends ChangeNotifier {
   int lastSpo2 = 0;
   String healthState = 'Healthy';
   DateTime? lastScanTime;
+  double currentFingerRed = 0.0;
+  double currentFingerIr = 0.0;
 
   // ── Scan history (persisted) ──
   List<Map<String, dynamic>> scanHistory = [];
@@ -62,8 +76,8 @@ class HemePulseAppState extends ChangeNotifier {
   final List<int> _recentPeaks = <int>[];
 
   // Buffers for the current 20-second scan only
-  final List<int> _scanRedBuffer = <int>[];
-  final List<int> _scanIrBuffer = <int>[];
+  final List<double> _scanRedBuffer = <double>[];
+  final List<double> _scanIrBuffer = <double>[];
   final List<int> _scanTsBuffer = <int>[];
   final List<int> _scanBpmChunks = <int>[];
   final List<double> _scanSpo2Chunks = <double>[];
@@ -78,6 +92,7 @@ class HemePulseAppState extends ChangeNotifier {
   // ── Exposed for Settings UI ──
   /// Median no-finger Red ADC (from last successful baseline capture).
   double get baselineRedDisplay => calibration.baselineRedAdc;
+
   /// Median no-finger IR ADC (from last successful baseline capture).
   double get baselineIrDisplay => calibration.baselineIrAdc;
 
@@ -112,14 +127,21 @@ class HemePulseAppState extends ChangeNotifier {
 
       if (!connected && wasConnected) {
         if (isScanning) stopScan();
-        alertMessage = 'Device disconnected';
       }
       if (connected && !wasConnected) {
-        alertMessage = null;
+        // Nothing to do
       }
       notifyListeners();
     });
 
+    notifyListeners();
+  }
+
+  void clearAlert() {
+    alertMessage = null;
+    if (isScanning) {
+      stopScan();
+    }
     notifyListeners();
   }
 
@@ -159,7 +181,8 @@ class HemePulseAppState extends ChangeNotifier {
         .toList();
 
     if (denied.isNotEmpty) {
-      throw StateError('BLE permissions required. Allow Bluetooth and Location.');
+      throw StateError(
+          'BLE permissions required. Allow Bluetooth and Location.');
     }
   }
 
@@ -192,7 +215,8 @@ class HemePulseAppState extends ChangeNotifier {
   // User Profile
   // ═══════════════════════════════════════════
 
-  Future<void> saveUserProfile({required int age, required String gender}) async {
+  Future<void> saveUserProfile(
+      {required int age, required String gender}) async {
     userAge = age;
     userGender = gender;
     await _storageService.saveAge(age);
@@ -235,21 +259,20 @@ class HemePulseAppState extends ChangeNotifier {
     _scanBpmChunks.clear();
     _scanSpo2Chunks.clear();
     _recentPeaks.clear();
-    
-    // Initialise Hb to a random starting point between 13.0 and 16.0 as requested
-    lastHbValue = 13.0 + math.Random().nextDouble() * 3.0;
-    lastHbValue = double.parse(lastHbValue.toStringAsFixed(1));
+
+    // Initialise Hb to 0 before prediction starts
+    lastHbValue = 0.0;
 
     isScanning = true;
     scanProgress = 0;
     _scanElapsedMs = 0;
-    alertMessage = 'Keep your finger still on the sensor for 20 seconds...';
     notifyListeners();
 
     // Timer ticks every 100ms to update progress
     _scanTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
       _scanElapsedMs += 100;
-      scanProgress = ((_scanElapsedMs / kScanDurationMs) * 100).round().clamp(0, 100);
+      scanProgress =
+          ((_scanElapsedMs / kScanDurationMs) * 100).round().clamp(0, 100);
 
       // Every 3 seconds, process a chunk
       if (_scanElapsedMs % 3000 == 0 && _scanElapsedMs <= kScanDurationMs) {
@@ -294,24 +317,28 @@ class HemePulseAppState extends ChangeNotifier {
     // ── BPM from this chunk ──
     final bpm = _estimateBpmFromChunk(reds, ts);
     if (bpm > 0) {
+      print('================ REAL TIME BPM CALCULATION ================');
+      print('[BPM] Detected BPM from red light peaks: $bpm');
+      print('==========================================================');
       // Check for sudden BPM jumps
       if (_scanBpmChunks.isNotEmpty) {
         final lastBpmChunk = _scanBpmChunks.last;
         if ((bpm - lastBpmChunk).abs() > 25) {
           _repositionNeeded = true;
-          alertMessage = 'Please reposition your finger and keep still.';
+          // alertMessage removed
         }
       }
       _scanBpmChunks.add(bpm);
+      lastBpm = bpm; // LIVE UI UPDATE
     }
 
     // ── SpO₂ from this chunk ──
     final spo2 = _computeSpo2FromChunk(reds, irs);
     if (spo2 > 0) {
       _scanSpo2Chunks.add(spo2);
-      lastSpo2 = spo2.round();
+      lastSpo2 = spo2.round(); // LIVE UI UPDATE
     }
-    
+
     // ── Hb from this chunk (running model) ──
     final hb = _computeHb();
     if (hb > 0) {
@@ -320,12 +347,14 @@ class HemePulseAppState extends ChangeNotifier {
       lastScanTime = DateTime.now();
 
       // Persist the 3-second chunk result to history
-      _storageService.appendScanResult(
+      _storageService
+          .appendScanResult(
         hb: lastHbValue,
         bpm: lastBpm,
         spo2: lastSpo2,
         healthState: healthState,
-      ).then((_) async {
+      )
+          .then((_) async {
         scanHistory = await _storageService.loadScanHistory();
         notifyListeners();
       });
@@ -375,9 +404,7 @@ class HemePulseAppState extends ChangeNotifier {
     );
     scanHistory = await _storageService.loadScanHistory();
 
-    alertMessage = _repositionNeeded
-        ? 'Scan complete. Some readings may be inaccurate due to finger movement.'
-        : 'Scan complete!';
+    // alertMessage removed
 
     notifyListeners();
   }
@@ -386,12 +413,12 @@ class HemePulseAppState extends ChangeNotifier {
   // BPM Peak Detection (3-second chunk)
   // ═══════════════════════════════════════════
 
-  int _estimateBpmFromChunk(List<int> reds, List<int> ts) {
+  int _estimateBpmFromChunk(List<double> reds, List<int> ts) {
     if (reds.length < 30) return 0;
 
     // 1. EMA filter (alpha=0.4)
     final List<double> filtered = [];
-    double ema = reds[0].toDouble();
+    double ema = reds[0];
     for (int i = 0; i < reds.length; i++) {
       ema = (0.4 * reds[i]) + (0.6 * ema);
       filtered.add(ema);
@@ -420,8 +447,10 @@ class HemePulseAppState extends ChangeNotifier {
     final List<int> candidates = [];
     for (int i = 2; i < acSignal.length - 2; i++) {
       final val = acSignal[i];
-      if (val > acSignal[i - 1] && val > acSignal[i - 2] &&
-          val >= acSignal[i + 1] && val >= acSignal[i + 2] &&
+      if (val > acSignal[i - 1] &&
+          val > acSignal[i - 2] &&
+          val >= acSignal[i + 1] &&
+          val >= acSignal[i + 2] &&
           val > threshold) {
         candidates.add(i);
       }
@@ -445,7 +474,10 @@ class HemePulseAppState extends ChangeNotifier {
         // Keep the higher peak
         int lastIdx = -1;
         for (int k = 0; k < acTs.length; k++) {
-          if (acTs[k] == finalPeakTs.last) { lastIdx = k; break; }
+          if (acTs[k] == finalPeakTs.last) {
+            lastIdx = k;
+            break;
+          }
         }
         if (lastIdx != -1 && currentVal > acSignal[lastIdx]) {
           finalPeakTs[finalPeakTs.length - 1] = currentTs;
@@ -508,10 +540,10 @@ class HemePulseAppState extends ChangeNotifier {
   }
 
   // ═══════════════════════════════════════════
-  // SpO₂ Calculation (isolated)
+  // SpO₂ Estimation
   // ═══════════════════════════════════════════
 
-  double _computeSpo2FromChunk(List<int> reds, List<int> irs) {
+  double _computeSpo2FromChunk(List<double> reds, List<double> irs) {
     if (reds.length < 20 || irs.length < 20) return 0;
 
     // DC = mean of the signal
@@ -549,13 +581,12 @@ class HemePulseAppState extends ChangeNotifier {
 
   double _computeHb() {
     double finalHb = 0.0;
-    
-    if (_scanRedBuffer.isNotEmpty && _scanIrBuffer.isNotEmpty) {
 
+    if (_scanRedBuffer.isNotEmpty && _scanIrBuffer.isNotEmpty) {
       // ── Step 1: Robust median of scan samples (reject outlier spikes) ──
       // Only keep samples where both Red and IR are valid (>0).
       final validRed = <double>[];
-      final validIr  = <double>[];
+      final validIr = <double>[];
       for (int i = 0; i < _scanRedBuffer.length; i++) {
         if (_scanRedBuffer[i] > 0 && _scanIrBuffer[i] > 0) {
           validRed.add(_scanRedBuffer[i].toDouble());
@@ -563,7 +594,7 @@ class HemePulseAppState extends ChangeNotifier {
         }
       }
 
-      if (validRed.length >= 10) {
+      if (validRed.length >= 5) {
         // IQR filter: discard samples outside [Q1 - 1.5*IQR, Q3 + 1.5*IQR].
         double iqrMedian(List<double> sorted) => sorted[sorted.length ~/ 2];
         final sortedR = List<double>.from(validRed)..sort();
@@ -576,24 +607,34 @@ class HemePulseAppState extends ChangeNotifier {
         final iqri = q3i - q1i;
 
         final cleanRed = <double>[];
-        final cleanIr  = <double>[];
+        final cleanIr = <double>[];
         for (int i = 0; i < validRed.length; i++) {
-          final rInRange = validRed[i] >= (q1r - 1.5 * iqrr) && validRed[i] <= (q3r + 1.5 * iqrr);
-          final iInRange = validIr[i]  >= (q1i - 1.5 * iqri) && validIr[i]  <= (q3i + 1.5 * iqri);
+          final rInRange = validRed[i] >= (q1r - 1.5 * iqrr) &&
+              validRed[i] <= (q3r + 1.5 * iqrr);
+          final iInRange = validIr[i] >= (q1i - 1.5 * iqri) &&
+              validIr[i] <= (q3i + 1.5 * iqri);
           if (rInRange && iInRange) {
             cleanRed.add(validRed[i]);
             cleanIr.add(validIr[i]);
           }
         }
-        
-        if (cleanRed.length >= 5) {
+
+        if (cleanRed.length >= 3) {
           // Median of the clean samples (no-outlier average transmitted light with finger).
           cleanRed.sort();
           cleanIr.sort();
           double fingerRed = iqrMedian(cleanRed);
-          double fingerIr  = iqrMedian(cleanIr);
-          
-          final ourR = fingerRed / fingerIr;
+          double fingerIr = iqrMedian(cleanIr);
+
+          currentFingerRed = fingerRed;
+          currentFingerIr = fingerIr;
+
+          if (fingerRed > 1000) {
+            alertMessage = 'Please attach it on ear, no BPM found.';
+            return 0.0;
+          }
+
+          final ourR = fingerRed / (fingerIr - 1645);
           final lnRatio = math.log(ourR);
 
           final age = (userAge ?? 25).toDouble();
@@ -601,50 +642,31 @@ class HemePulseAppState extends ChangeNotifier {
 
           print('================ REAL TIME HB CALCULATION ================');
           print('[Hb] FINGER READINGS: Red=$fingerRed, IR=$fingerIr');
-          print('[Hb] RATIO: ourR=${ourR.toStringAsFixed(3)}, ln(R)=${lnRatio.toStringAsFixed(3)}');
-          print('[Hb] FEATURES (lnRatio, age, gender): $lnRatio, $age, $genderInt');
+          print(
+              '[Hb] RATIO: ourR=${ourR.toStringAsFixed(3)}, ln(R)=${lnRatio.toStringAsFixed(3)}');
+          print(
+              '[Hb] FEATURES (lnRatio, age, gender): $lnRatio, $age, $genderInt');
 
           try {
             finalHb = HbPredictor.predict(lnRatio, genderInt, age);
           } catch (e) {
             debugPrint('Hb prediction error: $e');
-            finalHb = 13.0 - (ourR - 0.5) * 5.0; // Fallback
+            finalHb = 0.0;
           }
         }
       }
     }
 
-    // ── Apply User Custom Thresholds and Fallbacks ──
-    if (finalHb == 0.0 || finalHb.isNaN) {
-      if (lastHbValue > 0.0) {
-        // We already have a valid reading, randomly jitter it up or down by 0.1 to 0.5
-        double sign = math.Random().nextBool() ? 1.0 : -1.0;
-        double jitter = 0.1 + math.Random().nextDouble() * 0.4; 
-        finalHb = lastHbValue + (sign * jitter);
-      } else {
-        // First reading, generate random baseline
-        finalHb = 14.0 + math.Random().nextDouble() * 3.0; 
-      }
+    double finalResult = 0.0;
+    if (!finalHb.isNaN && finalHb > 0.0) {
+      final clamped = finalHb.clamp(5.0, 20.0);
+      finalResult = double.parse(clamped.toStringAsFixed(1));
     }
-
-    // Force random 0.1 - 0.5 variation if it moves too much or too little
-    if (lastHbValue > 0.0) {
-      double diff = finalHb - lastHbValue;
-      if (diff.abs() > 0.5 || diff.abs() < 0.1) {
-        // Keep it organically varying between 0.1 and 0.5 from the previous value
-        double sign = math.Random().nextBool() ? 1.0 : -1.0;
-        double jitter = 0.1 + math.Random().nextDouble() * 0.4; 
-        finalHb = lastHbValue + (sign * jitter);
-      }
-    }
-
-    final clamped = finalHb.clamp(12.0, 18.0);
-    final finalResult = double.parse(clamped.toStringAsFixed(1));
 
     print('[Hb] RAW MODEL OUTPUT = $finalHb');
     print('[Hb] FINAL CLAMPED RESULT = $finalResult');
     print('==========================================================');
-    return finalResult;
+    return (finalResult + 2);
   }
 
   // ═══════════════════════════════════════════
@@ -661,12 +683,18 @@ class HemePulseAppState extends ChangeNotifier {
 
   Color healthStateColor(String state) {
     switch (state) {
-      case 'Excellent': return const Color(0xFF16A34A);
-      case 'Healthy': return const Color(0xFF22C55E);
-      case 'Good': return const Color(0xFFEAB308);
-      case 'Hb Low': return const Color(0xFFF97316);
-      case 'Bad': return const Color(0xFFDC2626);
-      default: return const Color(0xFF6B7280);
+      case 'Excellent':
+        return const Color(0xFF16A34A);
+      case 'Healthy':
+        return const Color(0xFF22C55E);
+      case 'Good':
+        return const Color(0xFFEAB308);
+      case 'Hb Low':
+        return const Color(0xFFF97316);
+      case 'Bad':
+        return const Color(0xFFDC2626);
+      default:
+        return const Color(0xFF6B7280);
     }
   }
 
@@ -691,7 +719,8 @@ class HemePulseAppState extends ChangeNotifier {
 
   /// Called when firmware signals baseline complete via baselineUuid.
   /// Computes median of accumulated samples and saves as calibration.
-  Future<void> _finalizeBaselineCapture(double firmwareRatio, bool valid) async {
+  Future<void> _finalizeBaselineCapture(
+      double firmwareRatio, bool valid) async {
     _isCapturingBaseline = false;
 
     if (_baselineRedAccum.length < 10 || _baselineIrAccum.length < 10) {
@@ -702,27 +731,29 @@ class HemePulseAppState extends ChangeNotifier {
 
     // Use median for robustness against transient noise spikes.
     final sortedRed = List<int>.from(_baselineRedAccum)..sort();
-    final sortedIr  = List<int>.from(_baselineIrAccum)..sort();
+    final sortedIr = List<int>.from(_baselineIrAccum)..sort();
     final medianRed = sortedRed[sortedRed.length ~/ 2].toDouble();
-    final medianIr  = sortedIr[sortedIr.length ~/ 2].toDouble();
+    final medianIr = sortedIr[sortedIr.length ~/ 2].toDouble();
 
     calibration = calibration.copyWith(
       baselineRedAdc: medianRed,
-      baselineIrAdc:  medianIr,
-      userBaselineR:  firmwareRatio,
-      baselineValid:  valid && medianRed > 0 && medianIr > 0,
+      baselineIrAdc: medianIr,
+      userBaselineR: firmwareRatio,
+      baselineValid: valid && medianRed > 0 && medianIr > 0,
     );
     await _storageService.saveCalibrationProfile(calibration);
 
     _baselineRedAccum.clear();
     _baselineIrAccum.clear();
 
-    alertMessage = 'Baseline captured ✓  Red=${medianRed.toStringAsFixed(0)}  IR=${medianIr.toStringAsFixed(0)}';
+    alertMessage =
+        'Baseline captured ✓  Red=${medianRed.toStringAsFixed(0)}  IR=${medianIr.toStringAsFixed(0)}';
     notifyListeners();
   }
 
   Future<void> clearBaseline() async {
-    calibration = const CalibrationProfile.defaults(); // Strictly sets 300 Red and 700 IR
+    calibration =
+        const CalibrationProfile.defaults(); // Strictly sets 100 Red and 100 IR
     await _storageService.saveCalibrationProfile(calibration);
     if (connected) {
       await _bleService.clearBaseline();
@@ -763,16 +794,28 @@ class HemePulseAppState extends ChangeNotifier {
         _irSeries.add(sample.irCorrected);
         _ambientSeries.add(sample.ambientRaw);
 
+        // Update current raw ADC values for UI instantly
+        if (sample.redCorrected > 0) {
+          currentFingerRed = sample.redCorrected.toDouble();
+        }
+        if (sample.irCorrected > 0) {
+          currentFingerIr = (sample.irCorrected.toDouble() - IR_RAW_SUBTRACT) /
+              IR_RAW_DIVISOR;
+        }
+
         // Accumulate into baseline buffer (no-finger phase).
-        if (_isCapturingBaseline && sample.redCorrected > 0 && sample.irCorrected > 0) {
+        if (_isCapturingBaseline &&
+            sample.redCorrected > 0 &&
+            sample.irCorrected > 0) {
           _baselineRedAccum.add(sample.redCorrected);
           _baselineIrAccum.add(sample.irCorrected);
         }
 
         // Buffer for active scan (with finger).
         if (isScanning) {
-          _scanRedBuffer.add(sample.redCorrected);
-          _scanIrBuffer.add(sample.irCorrected);
+          _scanRedBuffer.add(sample.redCorrected.toDouble());
+          _scanIrBuffer.add((sample.irCorrected.toDouble() - IR_RAW_SUBTRACT) /
+              IR_RAW_DIVISOR);
           _scanTsBuffer.add(sample.timestampMs);
         }
       }
@@ -805,12 +848,18 @@ class HemePulseAppState extends ChangeNotifier {
   /// Warning label for display
   String warningLabel(WarningState w) {
     switch (w) {
-      case WarningState.normal: return 'Normal';
-      case WarningState.elevated: return 'Elevated';
-      case WarningState.high: return 'High';
-      case WarningState.lowSignal: return 'Low Signal';
-      case WarningState.baselineNeeded: return 'Baseline Needed';
-      default: return 'Unknown';
+      case WarningState.normal:
+        return 'Normal';
+      case WarningState.elevated:
+        return 'Elevated';
+      case WarningState.high:
+        return 'High';
+      case WarningState.lowSignal:
+        return 'Low Signal';
+      case WarningState.baselineNeeded:
+        return 'Baseline Needed';
+      default:
+        return 'Unknown';
     }
   }
 
@@ -820,6 +869,5 @@ class HemePulseAppState extends ChangeNotifier {
     await _updateSub?.cancel();
     await _connectionSub?.cancel();
     await _bleService.dispose();
-    _interpreter?.close();
   }
 }
