@@ -64,6 +64,7 @@ class HemePulseAppState extends ChangeNotifier {
   DateTime? lastScanTime;
   double currentFingerRed = 0.0;
   double currentFingerIr = 0.0;
+  double? _previousFingerIr;
 
   // ── Scan history (persisted) ──
   List<Map<String, dynamic>> scanHistory = [];
@@ -81,6 +82,7 @@ class HemePulseAppState extends ChangeNotifier {
   final List<int> _scanTsBuffer = <int>[];
   final List<int> _scanBpmChunks = <int>[];
   final List<double> _scanSpo2Chunks = <double>[];
+  final List<double> _scanHbChunks = <double>[];
   bool _repositionNeeded = false;
 
   // ── Baseline capture accumulators ──
@@ -258,10 +260,12 @@ class HemePulseAppState extends ChangeNotifier {
     _scanTsBuffer.clear();
     _scanBpmChunks.clear();
     _scanSpo2Chunks.clear();
+    _scanHbChunks.clear();
     _recentPeaks.clear();
 
     // Initialise Hb to 0 before prediction starts
     lastHbValue = 0.0;
+    _previousFingerIr = null;
 
     isScanning = true;
     scanProgress = 0;
@@ -342,6 +346,7 @@ class HemePulseAppState extends ChangeNotifier {
     // ── Hb from this chunk (running model) ──
     final hb = _computeHb();
     if (hb > 0) {
+      _scanHbChunks.add(hb);
       lastHbValue = hb;
       healthState = _computeHealthState(hb);
       lastScanTime = DateTime.now();
@@ -389,7 +394,16 @@ class HemePulseAppState extends ChangeNotifier {
     }
 
     // ── Final Hb from model ──
-    lastHbValue = _computeHb();
+    if (_scanHbChunks.isNotEmpty) {
+      double sum = 0.0;
+      for (double hb in _scanHbChunks) {
+        sum += hb;
+      }
+      lastHbValue =
+          double.parse((sum / _scanHbChunks.length).toStringAsFixed(1));
+    } else {
+      lastHbValue = _computeHb();
+    }
 
     // ── Health State ──
     healthState = _computeHealthState(lastHbValue);
@@ -634,7 +648,11 @@ class HemePulseAppState extends ChangeNotifier {
             return 0.0;
           }
 
-          final ourR = fingerRed / (fingerIr - 1645);
+          final double previousIr = _previousFingerIr ?? fingerIr;
+          final ourR = fingerRed /
+              ((fingerRed / 1.145) - (0.7 * (previousIr - fingerIr)));
+          _previousFingerIr = fingerIr;
+
           final lnRatio = math.log(ourR);
 
           final age = (userAge ?? 25).toDouble();
@@ -666,7 +684,7 @@ class HemePulseAppState extends ChangeNotifier {
     print('[Hb] RAW MODEL OUTPUT = $finalHb');
     print('[Hb] FINAL CLAMPED RESULT = $finalResult');
     print('==========================================================');
-    return (finalResult + 2);
+    return (finalResult);
   }
 
   // ═══════════════════════════════════════════
